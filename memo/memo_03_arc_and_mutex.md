@@ -9,6 +9,7 @@
   - [`bytes` クレートを依存に追加](#bytes-クレートを依存に追加)
   - [データベースの初期化処理](#データベースの初期化処理)
   - [タスクとスレッドと競合](#タスクとスレッドと競合)
+  - [`.await` をまたいで `MutexGuard` を保持する](#await-をまたいで-mutexguard-を保持する)
 
 ## 概要
 
@@ -260,3 +261,94 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+## `.await` をまたいで `MutexGuard` を保持する
+
+- `MutexGuard` は `Send` を実装していない
+- なので、`MutexGuard` が `.await` をまたいで存在しているとコンパイルエラーを起こす
+- たとえば、以下のコードはコンパイルエラーを起こす：
+
+  ```rust
+  use std::sync::Mutex;
+
+  async fn increment_and_do_stuff(mutex: &Mutex<i32>) {
+      let mut lock = mutex.lock().unwrap();
+      *lock += 1;
+      
+      do_something_async().await;
+  }
+
+  async fn do_something_async() {}
+
+  #[tokio::main]
+  async fn main() {
+      let m = Mutex::new(1);
+      tokio::spawn(async move {
+          increment_and_do_stuff(&m).await
+      });
+  }
+  ```
+
+- このケースの場合、`.await` をまたいで `MutexGuard` が存在しないようにすればよいので、ブロックを導入して `.await` の前に `MutexGuard` をドロップすればコンパイルできるようになる
+
+  ```rust
+  use std::sync::Mutex;
+
+  async fn increment_and_do_stuff(mutex: &Mutex<i32>) {
+      {
+          let mut lock = mutex.lock().unwrap();
+          *lock += 1;
+      }
+      
+      do_something_async().await;
+  }
+
+  async fn do_something_async() {}
+
+  #[tokio::main]
+  async fn main() {
+      let m = Mutex::new(1);
+      tokio::spawn(async move {
+          increment_and_do_stuff(&m).await
+      });
+  }
+  ```
+
+  - ただし、ブロックを導入するかわりに `drop(lock)` でドロップを試みるとコンパイラは期待通りにコンパイルしてくれないので気を付けること
+
+- このエラーの解消法は他にも以下のようなパターンがある
+  1. mutex を `struct` で包んで、その `struct` に実装した async ではないメソッドの中でのみ mutex のロックをとる
+
+     ```rust
+     use std::sync::Mutex;
+
+     struct CanIncrement {
+         mutex: Mutex<i32>,
+     }
+
+     impl CanIncrement {
+         fn increment(&self) {
+             let mut lock = self.mutex.lock().unwrap();
+             *lock += 1;
+         }
+     }
+
+     async fn increment_and_do_stuff(can_incr: &CanIncrement) {
+         can_incr.increment();
+         do_something_async().await;
+     }
+
+     async fn do_something_async() {}
+
+     #[tokio::main]
+     async fn main() {
+         let m = Mutex::new(1);
+         let c = CanIncrement { mutex: m };
+         tokio::spawn(async move { increment_and_do_stuff(&c).await });
+     }
+     ```
+
+  2. ステートを管理するためのタスクを spawn し、操作のためにメッセージの受け渡しを利用する &rarr; 次章で解説
+  3. Tokio の非同期ミューテックスを用いる
+     - Tokio が提供する `tokio::sync::mutex` は `.await` をまたいでも問題なくロックを保持できる
+     - しかし、同期のミューテックスに比べてかなり重いので 1., 2. のいずれかを選択肢ほうがよい
