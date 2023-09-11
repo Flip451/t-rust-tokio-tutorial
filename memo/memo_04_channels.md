@@ -11,6 +11,7 @@
   - [メッセージ型の定義](#メッセージ型の定義)
   - [チャンネルを作成](#チャンネルを作成)
   - ["マネージャー" タスクをスポーンする](#マネージャー-タスクをスポーンする)
+  - [レスポンスを受け取る](#レスポンスを受け取る)
 
 ## 概要
 
@@ -197,3 +198,132 @@
       Ok(())
   }
   ```
+
+## レスポンスを受け取る
+
+- 最後に、"マネージャー"タスク内で受け取った Redis サーバからのレスポンスメッセージを各タスクに共有する
+- そのために `oneshot` チャンネルを用いる
+
+- `oneshot` も `mpsc` 同じく `Sender` と `Receiver` を対生成して使用する
+  - ただしキャパシティの指定はない
+  - また、ハンドルはどちらもクローン出来ない
+  - `mpsc` とは異なり、データの受信側から送信側に送信機を送りつけて使用する
+
+- 今回は、各タスクから、"マネージャー"タスクに `Sender` を渡し、`Receiver` は "マネージャー"タスクからの返事を受け取るために用いる
+
+- まず、各タスクから"マネージャー"タスクに送る 'Command' 構造体に、送信機 `Responder` を追加する
+
+  ```rust
+  // --snip--
+  use tokio::sync::{mpsc, oneshot};
+
+  // resp の型は、"マネージャー" タスクの
+  // client.get(...).await, client.set(...).await
+  // の返り値の型を基準に決定
+  #[derive(Debug)]
+  enum Command {
+      Get {
+          key: String,
+          resp: Responder<Option<Bytes>>,
+      },
+      Set {
+          key: String,
+          val: Bytes,
+          resp: Responder<()>,
+      },
+  }
+
+  type Responder<T> = oneshot::Sender<Result<T>>;
+
+  // --snip--
+  ```
+
+- 次に送信機と受信機を対生成して、"マネージャー" タスクに送信機を送りつける
+- さらに、受信機でレスポンスが返ってくるのを待って内容を表示する
+
+  ```rust
+      // --snip--
+
+      // 2つのタスクを spawn する。
+      // タスク1 はキーによる "get" を行い、
+      // タスク2 は値を "set" する。
+      let tx1 = tx.clone();
+      let t1 = tokio::spawn(async move {
+          // "マネージャー"タスクから Redis サーバとの通信結果を受け取るためのチャンネルを作成
+          let (resp_tx, resp_rx) = oneshot::channel();
+
+          // マネージャータスク内のレシーバに GET コマンドを送信する
+          // 送信が失敗したときにプログラムが終了するように unwrap する
+          // コマンドと一緒に、マネージャータスクが通信結果を送り返すための送信機も添える
+          let _ = tx1
+              .send(Command::Get {
+                  key: "hello".to_string(),
+                  resp: resp_tx,
+              })
+              .await
+              .unwrap();
+
+          // マネージャータスクから、Redis の通信結果が返ってくるのを待つ
+          let response = resp_rx.await;
+          println!("GOT: {:?}", response)
+      });
+
+      let tx2 = tx.clone();
+      let t2 = tokio::spawn(async move {
+          // "マネージャー"タスクから Redis サーバとの通信結果を受け取るためのチャンネルを作成
+          let (resp_tx, resp_rx) = oneshot::channel();
+
+          // レシーバに SET コマンドを送信する
+          // 送信が失敗したときにプログラムが終了するように unwrap する
+          // コマンドと一緒に、マネージャータスクが通信結果を送り返すための送信機も添える
+          let _ = tx2
+              .send(Command::Set {
+                  key: "foo".to_string(),
+                  val: "bar".into(),
+                  resp: resp_tx,
+              })
+              .await
+              .unwrap();
+
+          // マネージャータスクから、Redis の通信結果が返ってくるのを待つ
+          let response = resp_rx.await;
+          println!("GOT: {:?}", response);
+      });
+
+      // --snip--
+  ```
+
+- 最後に "マネージャー" タスクで、各タスクから受け取った送信機で Redis サーバとの通信の結果を、各タスクに送り返す処理を追加する
+
+```rust
+    let manager = tokio::spawn(async move {
+        // TCP コネクションを確立
+        let mut client = client::connect("127.0.0.1:6379").await.unwrap();
+
+        // rx.recv().await の結果が None のときは
+        // すべての送信機がドロップしているので
+        // コマンドを受け付ける必要がなくなる
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                Command::Get { key, resp } => {
+                    let res: Result<Option<Bytes>> = client.get(&key).await;
+
+                    // Redis サーバとの通信結果を返却
+                    //     なお、send メソッドがエラーをはいた場合は無視する
+                    //     それは受信側（元のタスク）の受信機がすでにドロップされており
+                    //     受信側にレスポンスへの興味がすでにないことを表すから
+                    let _ = resp.send(res);
+                }
+                Command::Set { key, val, resp } => {
+                    let res: Result<()> = client.set(&key, val).await;
+
+                    // Redis サーバとの通信結果を返却
+                    //     なお、send メソッドがエラーをはいた場合は無視する
+                    //     それは受信側（元のタスク）の受信機がすでにドロップされており
+                    //     受信側にレスポンスへの興味がすでにないことを表すから
+                    let _ = resp.send(res);
+                }
+            }
+        }
+    });
+```
