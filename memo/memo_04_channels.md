@@ -121,7 +121,7 @@
           let _ = tx1.send(Command::Get { key: "hello".to_string() }).await;
       });
       
-      let tx2 = tx.clone();
+      let tx2 = tx;
       tokio::spawn(async move {
           // レシーバに SET コマンドを送信する
           let _ = tx2.send(Command::Set { key: "foo".to_string(), val: "bar".into() }).await;
@@ -178,7 +178,7 @@
               .await;
       });
 
-      let tx2 = tx.clone();
+      let tx2 = tx;
       let t2 = tokio::spawn(async move {
           // レシーバに SET コマンドを送信する
           let _ = tx2
@@ -268,7 +268,7 @@
           println!("GOT: {:?}", response)
       });
 
-      let tx2 = tx.clone();
+      let tx2 = tx;
       let t2 = tokio::spawn(async move {
           // "マネージャー"タスクから Redis サーバとの通信結果を受け取るためのチャンネルを作成
           let (resp_tx, resp_rx) = oneshot::channel();

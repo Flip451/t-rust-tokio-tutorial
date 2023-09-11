@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
         println!("GOT: {:?}", response)
     });
 
-    let tx2 = tx.clone();
+    let tx2 = tx;
     let t2 = tokio::spawn(async move {
         // "マネージャー"タスクから Redis サーバとの通信結果を受け取るためのチャンネルを作成
         let (resp_tx, resp_rx) = oneshot::channel();
