@@ -8,6 +8,7 @@
   - [Redis プロトコルのフレーム](#redis-プロトコルのフレーム)
   - [実装開始](#実装開始)
   - [読み取りのバッファ](#読み取りのバッファ)
+  - [`Buf` トレイトについて](#buf-トレイトについて)
 
 ## 概要
 
@@ -219,3 +220,96 @@ enum Frame {
       }
   }
   ```
+
+## `Buf` トレイトについて
+
+- 上記のコードでは、`AsyncReadExt::read_buf` を用いて、ストリームからバッファへのデータの読み込みを行っている
+
+- この read 関数は、`bytes::BufMut` トレイトが実装されていている値を引数にとる
+
+- この `bytes::BufMut` や `bytes::Buf` トレイトを実装している値を用いることで、バッファの利用に伴う面倒な処理を簡略に記述できる
+
+  - 例えば、先ほどの `read_frame` を、`bytes::BufMut` を利用していない `AsyncReadExt::read` メソッドを用いて実装しなおすと以下のようになる：
+
+    ```rust
+    use bytes::BytesMut;
+    use mini_redis::{Frame, Result};
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpStream;
+
+    pub struct Connection {
+        stream: TcpStream,
+        // バッファを Vec<u8> に置き換える
+        buffer: Vec<u8>,
+        // バッファのどの位置までデータが書き込まれているかを
+        // 記憶する cursor フィールドが追加で必要になる
+        cursor: usize,
+    }
+
+    impl Connection {
+        pub async fn new(stream: TcpStream) -> Self {
+            Self {
+                stream,
+                // 4KB のキャパシティをもつバッファを確保する
+                buffer: Vec::with_capacity(4096),
+                cursor: 0,
+            }
+        }
+
+        pub async fn read_frame(&mut self) -> Result<Option<Frame>> {
+            loop {
+                // 一見そのままだが、`parse_frame` 内では、self.buffer[..cursor] に対して処理が必要になる
+                if let Some(frame) = self.parse_frame()? {
+                    return Ok(Some(frame));
+                }
+
+                // 追加で、バッファが十分なキャパシティを持つように調整する処理が必要になる
+                //     cursor の位置が、バッファの末端まで到達したら、
+                //     バッファを拡張する
+                if self.buffer.len() == self.cursor {
+                    self.buffer.resize(self.cursor * 2, 0);
+                }
+
+                // ストリームからデータをバッファに読みだす時には、
+                // 既存のデータを上書きしないように、
+                // cursor の位置を参考に、データの入っていない部分に書き込むよう注意する
+                let n = self.stream.read(&mut self.buffer[self.cursor..]).await?;
+                if 0 == n {
+                    if self.buffer.is_empty() {
+                        return Ok(None);
+                    } else {
+                        return Err("Connection reset by peer".into());
+                    }
+                }
+
+                // 追加で cursor の位置を更新する処理が必要になる
+                self.cursor += n;
+            }
+        }
+
+        fn parse_frame(&self) -> Result<Option<Frame>> {
+            todo!()
+        }
+
+        // コネクションにフレームを書き込む
+        pub async fn write_frame(&mut self) -> Result<()> {
+            todo!()
+        }
+    }
+    ```
+
+  - `Buf` トレイトを活用せず `AsyncReadExt::read` のようなメソッドを使うことを選択すると、追加で以下の配慮が必要になる：
+    - どれだけのデータがバッファに格納されたを管理するカーソルを追加する
+    - バッファが満杯になったときにバッファを伸長させる
+    - データを書き込む際に、カーソル位置を参考に、読み込み済みのデータを上書きしないように注意する
+    - データを読み込むたびにカーソル位置の更新する
+    - フレームのパースの対象が、バッファの先頭から、カーソルの位置までになる
+
+- `Buf`, `BufMut` トレイトでは、このような少々面倒なバッファとカーソルを組み合わせて使う処理を抽象化してくれている
+  - `Buf` トレイトは、データの読み取り元となるような型に実装されている
+  - `BufMut` トレイトは、データの書き込み先となるような型に実装されている
+
+- たとえば、`read_buf` メソッドに `BufMut` を実装した値を渡すと、バッファの内部でカーソル位置が（`read_buf` によって）自動で更新される
+
+- さらに、`Vec<u8>` を使う場合、バッファは必ず初期化されていなければならないが、`BytesMut` を用いると初期化のステップを経る必要がなくなる
+  - これにより、バッファを初期化するコストも軽減できる
