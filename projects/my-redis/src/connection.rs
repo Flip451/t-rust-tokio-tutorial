@@ -3,18 +3,19 @@ use std::io::Cursor;
 use bytes::{Buf, BytesMut};
 use mini_redis::frame::Error::Incomplete;
 use mini_redis::{Frame, Result};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, BufWriter};
 use tokio::net::TcpStream;
 
 pub struct Connection {
-    stream: TcpStream,
+    stream: BufWriter<TcpStream>,
     buffer: BytesMut,
 }
 
 impl Connection {
     pub async fn new(stream: TcpStream) -> Self {
         Self {
-            stream,
+            // ただ BufWriter でラップするだけで良しなにバッファリングしてくれる
+            stream: BufWriter::new(stream),
             // 4KB のキャパシティをもつバッファを確保する
             buffer: BytesMut::with_capacity(4096),
         }
