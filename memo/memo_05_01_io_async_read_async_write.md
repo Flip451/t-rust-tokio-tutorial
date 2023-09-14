@@ -98,20 +98,20 @@
 - `AsyncReadExt::read_to_end` は、EOF（End Of File） にいたるまでストリームからすべてのバイトを読み込む
 - `read` と異なり、引数には `&Vec<u8>` を受け取るので注意（`read` では `&[u8]` を受け取る）
 
-```rust
-use anyhow::{Result, Ok};
-use tokio::{fs::File, io::AsyncReadExt};
+  ```rust
+  use anyhow::{Result, Ok};
+  use tokio::{fs::File, io::AsyncReadExt};
 
-#[tokio::main]
-async fn main() -> Result<()>{
-    let mut f = File::create("foo.txt").await?;
-    let mut buffer = vec![];
-    
-    let n = f.read_to_end(&mut buffer).await?;
-    println!("The bytes: {:?}, size: {}", buffer, n);
-    Ok(())
-}
-```
+  #[tokio::main]
+  async fn main() -> Result<()>{
+      let mut f = File::create("foo.txt").await?;
+      let mut buffer = vec![];
+      
+      let n = f.read_to_end(&mut buffer).await?;
+      println!("The bytes: {:?}, size: {}", buffer, n);
+      Ok(())
+  }
+  ```
 
 ### `async fn write()`
 
@@ -149,23 +149,23 @@ async fn main() -> Result<()>{
 
 - `AsyncWriteExt::write_all` は writer にバッファ全体を書き込む
 
-```rust
-use anyhow::Result;
-use tokio::{fs::File, io::AsyncWriteExt};
+  ```rust
+  use anyhow::Result;
+  use tokio::{fs::File, io::AsyncWriteExt};
 
-#[tokio::main]
-async fn main() -> Result<()>{
-    let mut f = File::create("foo.txt").await?;
-    
-    f.write_all(b"Hello, world! This is result of AsyncWriteExt::write_all method.").await?;
-    
-    Ok(())
-}
-```
+  #[tokio::main]
+  async fn main() -> Result<()>{
+      let mut f = File::create("foo.txt").await?;
+      
+      f.write_all(b"Hello, world! This is result of AsyncWriteExt::write_all method.").await?;
+      
+      Ok(())
+  }
+  ```
 
 ## ヘルパー関数
 
-- `std` と同様に、`tokio::io` モジュールは 標準入力、標準出力、標準エラー出力 を利用するための API や、数々の便利関数を提供している
+- `std` と同様に、`tokio::io` モジュールは 標準入力、標準出力、標準エラー出力 を利用するための API や、数々の便利な関数を提供している
 - 例えば、`tokio::io::copy` を用いると、reader から writer へとすべてのデータを非同期にコピーすることができる
 
   ```rust
