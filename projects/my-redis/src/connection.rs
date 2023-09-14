@@ -1,4 +1,7 @@
-use bytes::BytesMut;
+use std::io::Cursor;
+
+use bytes::{Buf, BytesMut};
+use mini_redis::frame::Error::Incomplete;
 use mini_redis::{Frame, Result};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -23,7 +26,7 @@ impl Connection {
         loop {
             // バッファされたデータから単一のフレームをパースすることを試みて
             // うまくパースされたらフレームを返却する
-            // 
+            //
             // もし Ok(None) が返ってきたら
             // - 追加の読み込みが必要
             // - EOF
@@ -67,8 +70,43 @@ impl Connection {
     //    追加でデータをバッファすれば問題ないはずであるか、
     //    読み込むべきデータがもうないかのいずれかであろうことを伝える
     // 3. 内部で問題が発生したら Err を返す
-    fn parse_frame(&self) -> Result<Option<Frame>> {
-        todo!()
+    fn parse_frame(&mut self) -> Result<Option<Frame>> {
+        // Frame 構造体はパースの実行のためにカーソルを用いる
+        let mut buf = Cursor::new(&self.buffer[..]);
+
+        // まず、単一のフレームをパースするのに十分なデータがバッファに蓄えられているかをチェックする
+        // その結果によって場合分けする：
+        //      もし、十分な量蓄えられていたら、Ok(_) のアームに進む
+        //      不十分なら Err(Incomplete) のアームに進む
+        //      それ以外のエラーが発生しているようならエラーを返す
+        match Frame::check(&mut buf) {
+            Ok(_) => {
+                // parse に成功した場合、`Frame::check` 関数は
+                // カーソルの位置をフレームの終端にまで進める
+                // なので、カーソル位置を取得するとフレームの長さがわかる
+                let len = buf.position() as usize;
+
+                // パースの実行のためにカーソル位置を先頭に戻す
+                buf.set_position(0);
+
+                // フレームを取得する
+                // もし、エラーが返ってきたら、送られてきたフレームの内容が不正であることを表すので、
+                // このコネクションを切断する
+                let frame = Frame::parse(&mut buf)?;
+
+                // バッファされているデータのうち、パースし終えた部分を破棄する
+                //      advance(cnt) が読み込み用のバッファに対して呼ばれると、
+                //      `cnt` までのデータがすべて破棄される
+                self.buffer.advance(len);
+
+                // パースに成功したフレームを返す
+                Ok(Some(frame))
+            }
+            // 十分な量のデータがバッファされていなかった場合
+            Err(Incomplete) => Ok(None),
+            // エラーが発生した場合
+            Err(e) => Err(e.into()),
+        }
     }
 
     // コネクションにフレームを書き込む

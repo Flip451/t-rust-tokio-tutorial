@@ -1,8 +1,8 @@
-# framing
+# framing: buffered reads
 
 ## 目次
 
-- [framing](#framing)
+- [framing: buffered reads](#framing-buffered-reads)
   - [目次](#目次)
   - [概要](#概要)
   - [Redis プロトコルのフレーム](#redis-プロトコルのフレーム)
